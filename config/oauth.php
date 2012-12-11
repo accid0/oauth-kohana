@@ -154,7 +154,7 @@ return array(
   'vkontakte'   => array(
     'oauth_version'                => '2.0',
     'request_token_url'            => '',
-    'dialog_url'                   => 'https://oauth.vk.com/authorize?client_id={CLIENT_ID}&scope={SCOPE}&redirect_uri={REDIRECT_URI}&response_type=code',
+    'dialog_url'                   => 'https://oauth.vk.com/authorize?client_id={CLIENT_ID}&scope={SCOPE}&redirect_uri={REDIRECT_URI}&response_type=token&display=popup',
     'append_state_to_redirect_uri' => '',
     'access_token_url'             => 'https://oauth.vk.com/access_token',
     'authorization_header'         => TRUE,

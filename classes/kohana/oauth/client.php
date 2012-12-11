@@ -623,10 +623,9 @@ class Kohana_Oauth_Client
   {
     if (IsSet($_SESSION['OAUTH_STATE']))
       $state = $_SESSION['OAUTH_STATE'];
-    elseif( strlen($this->append_state_to_redirect_uri) )
-      $state = $_SESSION['OAUTH_STATE'] = time() . '-' . substr(md5(rand() . time()), 0, 6);
     else
-      $state = NULL;
+      $state = $_SESSION['OAUTH_STATE'] = time() . '-' . substr(md5(rand() . time()), 0, 6);
+
     return (TRUE);
   }
 
@@ -762,10 +761,18 @@ class Kohana_Oauth_Client
   */
   protected Function GetAccessToken(&$access_token)
   {
+
     if (!session_start())
       return ($this->SetPHPError('it was not possible to start the PHP session', $php_error_message));
     if (IsSet($_SESSION['OAUTH_ACCESS_TOKEN'][$this->access_token_url]))
       $access_token = $_SESSION['OAUTH_ACCESS_TOKEN'][$this->access_token_url];
+    elseif( IsSet( $_GET['access_token']) ){
+      $access_token = array();
+      $access_token['value']      = $_GET['access_token'];
+      $access_token['expiry']     = $_GET['expires_in'];
+      $access_token['type']       = '';
+      $access_token['authorized'] = TRUE;
+    }
     else
       $access_token = array();
     return TRUE;
