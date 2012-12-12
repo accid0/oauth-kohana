@@ -117,6 +117,20 @@ class Kohana_Oauth_Client
   {/metadocument}
   */
   var $error = '';
+  /*
+  {metadocument}
+    <variable>
+      <name>driver</name>
+      <type>STRING</type>
+      <value></value>
+      <documentation>
+        <purpose>Store servers driver name</purpose>
+        <usage></usage>
+      </documentation>
+    </variable>
+  {/metadocument}
+  */
+  var $driver = '';
 
   /**
    * @var array Kohana_Oauth_Client
@@ -1055,7 +1069,7 @@ class Kohana_Oauth_Client
       <do>
   {/metadocument}
   */
-  protected Function CallAPI($url, $method, $parameters, $options, &$response)
+  public Function CallAPI($url, $method, $parameters, $options, &$response)
   {
     if (!IsSet($options['Resource']))
       $options['Resource'] = 'API call';
@@ -1132,6 +1146,8 @@ class Kohana_Oauth_Client
       $client->$key = $value;
     }
 
+    $client->driver = $driver;
+
     return self::$instance[$driver];
 
   }
@@ -1153,7 +1169,7 @@ class Kohana_Oauth_Client
       <do>
   {/metadocument}
   */
-  protected Function Process()
+  public Function Process()
   {
     switch (intval($this->oauth_version)) {
       case 1:
@@ -1485,7 +1501,7 @@ class Kohana_Oauth_Client
       <do>
   {/metadocument}
   */
-  protected Function Finalize($success)
+  public Function Finalize($success)
   {
     return ($success);
   }
