@@ -8,5 +8,13 @@
  */
 class Oauth extends Kohana_Oauth_Client
 {
-
+  /**
+   * @param string $driver
+   * @param array  $options
+   *
+   * @return Kohana_Oauth_Client
+   */
+  public static function instance( $driver, array $options = array(), $class = 'Oauth' ){
+    return parent::instance( $driver, $options, $class);
+  }
 }

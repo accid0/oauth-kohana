@@ -89,7 +89,7 @@
 {/metadocument}
 */
 
-class Kohana_Oauth_Client
+abstract class Kohana_Oauth_Client
 {
   /*
   {metadocument}
@@ -321,6 +321,7 @@ class Kohana_Oauth_Client
   */
   var $append_state_to_redirect_uri = '';
 
+  var $state = '';
   /*
   {metadocument}
     <variable>
@@ -587,6 +588,10 @@ class Kohana_Oauth_Client
 
   var $oauth_user_agent = 'PHP-OAuth-API (http://www.phpclasses.org/oauth-api $Revision: 1.36 $)';
 
+  var $access_token_id = NULL;
+
+  var $authorized = FALSE;
+
   protected Function SetError($error)
   {
     $this->error = $error;
@@ -635,10 +640,7 @@ class Kohana_Oauth_Client
 
   protected Function GetStoredState(&$state)
   {
-    if (IsSet($_SESSION['OAUTH_STATE']))
-      $state = $_SESSION['OAUTH_STATE'];
-    else
-      $state = $_SESSION['OAUTH_STATE'] = time() . '-' . substr(md5(rand() . time()), 0, 6);
+    $state = $this->state;
 
     return (TRUE);
   }
@@ -727,7 +729,7 @@ class Kohana_Oauth_Client
   */
   protected Function StoreAccessToken($access_token)
   {
-    $_SESSION['OAUTH_ACCESS_TOKEN'][$this->access_token_url] = $access_token;
+
     return TRUE;
   }
 
@@ -776,20 +778,41 @@ class Kohana_Oauth_Client
   protected Function GetAccessToken(&$access_token)
   {
 
-    if (!session_start())
-      return ($this->SetPHPError('it was not possible to start the PHP session', $php_error_message));
-    if (IsSet($_SESSION['OAUTH_ACCESS_TOKEN'][$this->access_token_url]))
-      $access_token = $_SESSION['OAUTH_ACCESS_TOKEN'][$this->access_token_url];
-    elseif( IsSet( $_GET['access_token']) ){
-      $access_token = array();
-      $access_token['value']      = $_GET['access_token'];
-      $access_token['expiry']     = $_GET['expires_in'];
-      $access_token['type']       = '';
-      $access_token['authorized'] = TRUE;
+    $access_token = array();
+    if ( strlen( $this->access_token) ){
+      $access_token['value'] = $this->access_token;
+      if ( strlen( $this->access_token_expiry) )
+        $access_token['expiry'] = $this->access_token_expiry;
+      if ( strlen( $this->access_token_type) )
+        $access_token['type'] = $this->access_token_type;
+      if ( strlen( $this->access_token_id) )
+        $access_token['user_id'] = $this->access_token_id;
+      if ( strlen( $this->access_token_secret) )
+        $access_token['secret'] = $this->access_token_secret;
+      if ( strlen( $this->authorized) )
+        $access_token['authorized'] = $this->authorized;
     }
-    else
-      $access_token = array();
     return TRUE;
+  }
+
+  /**
+   * @return array
+   */
+  protected function ParseTokenRequest(){
+    $access_token = array();
+    if ( isset($_GET['access_token']) )
+      $access_token['access_token']      = $_GET['access_token'];
+    if ( isset($_GET['secret']) )
+      $access_token['secret']            = $_GET['secret'];
+    if ( isset($_GET['expires']) )
+      $access_token['expires']           = $_GET['expires'];
+    if ( isset($_GET['expires_in']) )
+      $access_token['expires_in']        = $_GET['expires_in'];
+    if ( isset($_GET['token_type']) )
+      $access_token['token_type']        = $_GET['token_type'];
+    if ( isset($_GET['user_id']) )
+      $access_token['user_id']           = $_GET['user_id'];
+    return $access_token;
   }
 
   /*
@@ -828,10 +851,38 @@ class Kohana_Oauth_Client
     return (pack($pack, $function((str_repeat("\x5c", 64) ^ $key) . pack($pack, $function((str_repeat("\x36", 64) ^ $key) . $data)))));
   }
 
-  protected Function SendAPIRequest($url, $method, $parameters, $oauth, $options, &$response)
+  /**
+   * @param string $code
+   * @param string $stored_state
+   *
+   * @return bool
+   */
+  protected function SendTokenRequest( $code, $stored_state ){
+    if (!$this->GetAccessTokenURL($url))
+      return FALSE;
+    if (!$this->GetRedirectURI($redirect_uri))
+      return FALSE;
+    if (strlen($this->append_state_to_redirect_uri))
+      $redirect_uri .= (strpos($redirect_uri, '?') === FALSE ? '?' : '&') . $this->append_state_to_redirect_uri . '=' . $stored_state;
+
+    $values = array(
+      'code'         => $code,
+      'client_id'    => $this->client_id,
+      'client_secret'=> $this->client_secret,
+      'redirect_uri' => $redirect_uri,
+      'grant_type'   => 'authorization_code'
+    );
+    if (!$this->SendAPIRequest($url, 'POST', $values, NULL, array('Resource'      => 'OAuth access token',
+                                                                  'ConvertObjects'=> TRUE), $response)
+            )
+      return FALSE;
+    return $response;
+  }
+
+  protected Function SendAPIRequest($url, $method, $parameters, $oauth, $options, &$response, $sig = FALSE)
   {
     $this->response_status   = 0;
-    $http                    = new http_class;
+    $http                    = new Http_Client;
     $http->debug             = ($this->debug && $this->debug_http);
     $http->log_debug         = TRUE;
     $http->sasl_authenticate = 0;
@@ -1093,6 +1144,37 @@ class Kohana_Oauth_Client
     return ($this->SendAPIRequest($url, $method, $parameters, $oauth, $options, $response));
   }
 
+  /**
+   * @param      $url
+   * @param      $parameters
+   * @param      $response
+   * @param bool $has_secret
+   *
+   * @return bool
+   */
+  public Function CallAPIMethod($url, $parameters, &$response, $has_secret = FALSE)
+  {
+    $uri = '?access_token=' . UrlEncode($this->access_token);
+    foreach( $parameters as $key => $value ){
+      $uri .= "&$key=" . $value;
+    }
+    $url .= $uri;
+    if ( $has_secret !== FALSE){
+      $has_secret .= $uri;
+      $url .= "&sig=" . md5( $has_secret . $this->access_token_secret );
+    }
+    //$response = file_get_contents( $url );
+    $ch = curl_init(); // start
+    curl_setopt( $ch, CURLOPT_URL, (string)$url ); // where
+    curl_setopt ( $ch, CURLOPT_RETURNTRANSFER, TRUE ); // why
+    $request_result = curl_exec( $ch ); // do this
+    curl_close( $ch ); // close, free memory
+    $request_result = urldecode ( $request_result );
+    $request_result = json_decode ( $request_result, TRUE );
+    $response = $request_result['response'];
+    return TRUE;
+  }
+
   /*
   {metadocument}
       </do>
@@ -1108,7 +1190,7 @@ class Kohana_Oauth_Client
    * @return Kohana_Oauth_Client
    * @throws Oauth_Exception
    */
-  public static function instance($driver, array $options = array())
+  public static function instance($driver, array $options = array(), $class = NULL )
   {
 
     $driver = (string)$driver;
@@ -1140,7 +1222,13 @@ class Kohana_Oauth_Client
         'set the client_id to App ID/API Key and client_secret with App Secret on server :server',
         array( ':server' => $driver ));
 
-    self::$instance[$driver] = $client = new self();
+    $cl = new ReflectionClass( $class );
+    if ( ! $cl->isSubclassOf('Kohana_Oauth_Client') )
+      throw new Oauth_Exception(
+        'class client :client must inherit class Kohana_Oauth_Client',
+        array( ':client' => $class ));
+
+    self::$instance[$driver] = $client = new $class;
 
     foreach ($config as $key => $value) {
       $client->$key = $value;
@@ -1181,6 +1269,7 @@ class Kohana_Oauth_Client
         if (IsSet($access_token['authorized'])
           && IsSet($access_token['value'])
         ) {
+
           $expired = (IsSet($access_token['expiry']) && strcmp($access_token['expiry'], gmstrftime('%Y-%m-%d %H:%M:%S')) <= 0);
           if (!$access_token['authorized']
             || $expired
@@ -1337,13 +1426,22 @@ class Kohana_Oauth_Client
               $this->OutputDebug('The OAuth access token expired in ' . $this->access_token_expiry);
           }
           else {
+
             $this->access_token = $access_token['value'];
             if (IsSet($access_token['type']))
               $this->access_token_type = $access_token['type'];
+
+            if (IsSet($access_token['secret']))
+              $this->access_token_secret = $access_token['secret'];
+
+            if (IsSet($access_token['user_id']))
+              $this->access_token_id = $access_token['user_id'];
+
             if ($this->debug)
               $this->OutputDebug('The OAuth access token ' . $this->access_token . ' is valid');
-            if (strlen($this->access_token_type))
+            if ( $this->debug && strlen($this->access_token_type))
               $this->OutputDebug('The OAuth access token is of type ' . $this->access_token_type);
+
             return TRUE;
           }
         }
@@ -1360,7 +1458,7 @@ class Kohana_Oauth_Client
             $this->OutputDebug('Checking the authentication code');
           if (!$this->GetRequestCode($code))
             return FALSE;
-          if (strlen($code) == 0) {
+          if ( strlen($code) == 0 && !isset( $_GET['access_token'] ) ) {
             if (!$this->GetRequestError($this->authorization_error))
               return FALSE;
             if (IsSet($this->authorization_error)) {
@@ -1382,21 +1480,13 @@ class Kohana_Oauth_Client
             }
             return ($this->SetError('it was not returned the OAuth dialog code'));
           }
-          if (!$this->GetAccessTokenURL($url))
-            return FALSE;
-          if (!$this->GetRedirectURI($redirect_uri))
-            return FALSE;
-          $values = array(
-            'code'         => $code,
-            'client_id'    => $this->client_id,
-            'client_secret'=> $this->client_secret,
-            'redirect_uri' => $redirect_uri,
-            'grant_type'   => 'authorization_code'
-          );
-          if (!$this->SendAPIRequest($url, 'POST', $values, NULL, array('Resource'      => 'OAuth access token',
-                                                                        'ConvertObjects'=> TRUE), $response)
-          )
-            return FALSE;
+
+          if (strlen($code) != 0)
+            $response = $this->SendTokenRequest( $code, $stored_state );
+          else
+            $response = $this->ParseTokenRequest();
+
+
           if (strlen($this->access_token_error)) {
             $this->authorization_error = $this->access_token_error;
             return TRUE;
@@ -1419,10 +1509,13 @@ class Kohana_Oauth_Client
           ) {
             $expires = (IsSet($response['expires']) ? $response['expires'] : $response['expires_in']);
             if (strval($expires) !== strval(intval($expires))
-              || $expires <= 0
+              || $expires < 0
             )
               return ($this->SetError('OAuth server did not return a supported type of access token expiry time'));
-            $this->access_token_expiry = gmstrftime('%Y-%m-%d %H:%M:%S', time() + $expires);
+
+            if ( $expires != 0 )
+              $this->access_token_expiry = gmstrftime('%Y-%m-%d %H:%M:%S', time() + $expires);
+            else $this->access_token_expiry = gmstrftime('%Y-%m-%d %H:%M:%S', time() + 31536000);
             if ($this->debug)
               $this->OutputDebug('Access token expiry: ' . $this->access_token_expiry . ' UTC');
             $access_token['expiry'] = $this->access_token_expiry;
@@ -1437,6 +1530,15 @@ class Kohana_Oauth_Client
           }
           else
             $this->access_token_type = '';
+
+          if ( isset( $response['secret']) ){
+            $this->access_token_secret = $access_token['secret'] = $response['secret'];
+          }
+
+          if ( isset( $response['user_id']) ){
+            $this->access_token_id = $access_token['user_id'] = $response['user_id'];
+          }
+
           if (!$this->StoreAccessToken($access_token))
             return FALSE;
         }
@@ -1596,6 +1698,8 @@ class Kohana_Oauth_Client
     </function>
   {/metadocument}
   */
+
+  protected function __construct(){}
 
 }
 
