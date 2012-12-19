@@ -617,7 +617,7 @@ abstract class Kohana_Oauth_Client
       $message = $this->debug_prefix . $message;
       $this->debug_output .= $message . "\n";
       ;
-      error_log($message);
+      DB::log($message);
     }
     return (TRUE);
   }
@@ -1382,7 +1382,7 @@ abstract class Kohana_Oauth_Client
           if (!$this->GetRedirectURI($redirect_uri))
             return FALSE;
           $oauth = array(
-            'oauth_callback'=> UrlEncode($redirect_uri),
+            'oauth_callback'=> $redirect_uri,
           );
           if (!$this->SendAPIRequest($url, 'GET', array(), $oauth, array('Resource'=> 'OAuth request token'), $response))
             return FALSE;
@@ -1394,8 +1394,10 @@ abstract class Kohana_Oauth_Client
             || !IsSet($response['oauth_token_secret'])
           ) {
             $this->authorization_error = 'it was not returned the requested token';
+            $this->OutputDebug( var_export( $response, TRUE));
             return TRUE;
           }
+          $this->OutputDebug( var_export( $response, TRUE));
           $access_token = array(
             'value'     => $response['oauth_token'],
             'secret'    => $response['oauth_token_secret'],

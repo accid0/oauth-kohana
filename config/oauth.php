@@ -165,8 +165,8 @@ return array(
     'client_secret'                => '',
     'redirect_uri'                 => '',
     'scope'                        => '',
-    'debug'                        => FALSE,
-    'debug_http'                   => FALSE,
+    'debug'                        => TRUE,
+    'debug_http'                   => TRUE,
   ),
   'vkontakte'   => array(
     'oauth_version'                => '2.0',
