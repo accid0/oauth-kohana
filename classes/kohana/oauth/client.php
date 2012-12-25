@@ -594,6 +594,8 @@ abstract class Kohana_Oauth_Client
 
   var $method_url = '';
 
+  var $urlencode_redirect = TRUE;
+
   protected Function SetError($error)
   {
     $this->error = $error;
@@ -674,6 +676,7 @@ abstract class Kohana_Oauth_Client
 
   protected Function GetRequestToken(&$token, &$verifier)
   {
+    if ( $this->debug ) $this->OutputDebug( var_export( $_REQUEST, TRUE));
     $token    = (IsSet($_GET['oauth_token']) ? $_GET['oauth_token'] : NULL);
     $verifier = (IsSet($_GET['oauth_verifier']) ? $_GET['oauth_verifier'] : NULL);
     return (TRUE);
@@ -731,7 +734,12 @@ abstract class Kohana_Oauth_Client
   */
   protected Function StoreAccessToken($access_token)
   {
-
+    switch (intval($this->oauth_version)) {
+      case 1:
+        if ( !session_start() ) return FALSE;
+        $_SESSION['OAUTH'][$this->driver]  = $access_token;
+        break;
+    }
     return TRUE;
   }
 
@@ -781,18 +789,27 @@ abstract class Kohana_Oauth_Client
   {
 
     $access_token = array();
-    if ( strlen( $this->access_token) ){
-      $access_token['value'] = $this->access_token;
-      if ( strlen( $this->access_token_expiry) )
-        $access_token['expiry'] = $this->access_token_expiry;
-      if ( strlen( $this->access_token_type) )
-        $access_token['type'] = $this->access_token_type;
-      if ( strlen( $this->access_token_id) )
-        $access_token['user_id'] = $this->access_token_id;
-      if ( strlen( $this->access_token_secret) )
-        $access_token['secret'] = $this->access_token_secret;
-      if ( strlen( $this->authorized) )
-        $access_token['authorized'] = $this->authorized;
+
+    switch (intval($this->oauth_version)) {
+      case 1:
+        if ( !session_start() ) return FALSE;
+          $access_token = $_SESSION['OAUTH'][$this->driver];
+      case 2:
+
+        if ( strlen( $this->access_token) ){
+          $access_token['value'] = $this->access_token;
+          if ( strlen( $this->access_token_expiry) )
+            $access_token['expiry'] = $this->access_token_expiry;
+          if ( strlen( $this->access_token_type) )
+            $access_token['type'] = $this->access_token_type;
+          if ( strlen( $this->access_token_id) )
+            $access_token['user_id'] = $this->access_token_id;
+          if ( strlen( $this->access_token_secret) )
+            $access_token['secret'] = $this->access_token_secret;
+          if ( strlen( $this->authorized) )
+            $access_token['authorized'] = $this->authorized;
+        }
+        break;
     }
     return TRUE;
   }
@@ -838,6 +855,8 @@ abstract class Kohana_Oauth_Client
 
   protected Function HMAC($function, $data, $key)
   {
+    //return hash_hmac( $function, $data, $key);
+
     switch ($function) {
       case 'sha1':
         $pack = 'H40';
@@ -874,10 +893,12 @@ abstract class Kohana_Oauth_Client
       'grant_type'   => 'authorization_code',
       'redirect_uri' => $redirect_uri,
     );
+
     if (!$this->SendAPIRequest($url, 'POST', $values, NULL, array('Resource'      => 'OAuth access token',
                                                                   'ConvertObjects'=> TRUE), $response)
             )
       return FALSE;
+    $this->OutputDebug( var_export( $response, TRUE));
     return $response;
   }
 
@@ -890,7 +911,7 @@ abstract class Kohana_Oauth_Client
     $http->sasl_authenticate = 0;
     $http->user_agent        = $this->oauth_user_agent;
     if ($this->debug)
-      $this->OutputDebug('Accessing the ' . $options['Resource'] . ' at ' . $url);
+      $this->OutputDebug('Accessing the ' . $options['Resource'] . ' at ' . $url . ' with parameters ' . var_export( $parameters, TRUE));
     $arguments     = array();
     $method        = strtoupper($method);
     $authorization = '';
@@ -927,6 +948,10 @@ abstract class Kohana_Oauth_Client
         $first = FALSE;
       }
       $key                       = $this->Encode($this->client_secret) . '&' . $this->Encode($this->access_token_secret);
+
+      if ($this->debug)
+        $this->OutputDebug('Signature prepare from sign = {' . $sign . '} and key = {' . $key . '}');
+
       $values['oauth_signature'] = base64_encode($this->HMAC('sha1', $sign, $key));
       if ($this->authorization_header) {
         $authorization = 'OAuth';
@@ -1154,30 +1179,217 @@ abstract class Kohana_Oauth_Client
    *
    * @return bool
    */
-  public Function CallAPIMethod( $method , $parameters, &$response, $has_secret = FALSE)
+  public Function CallAPIMethod( $method, $action , $parameters, &$response, $body = '', $options = array())
   {
-    $params = '';
+    $params = array();
+    $oauth = array();
+    $action = strtoupper( $action);
     foreach( $parameters as $key => $value ){
-      $params .= ( $params === '' ? '' : '&' ) . "$key=" . $value;
+      $parameters[$key] = is_string( $value) ? $value : json_encode( $value);
     }
-    $options = array(
-      '{METHOD_NAME}'     => $method,
-      '{METHOD_URI}'      => $params,
-      '{ACCESS_TOKEN}'    => $this->access_token,
-    );
-    $url = str_replace( array_keys( $options), array_values( $options), $this->method_url);
-    if ( $has_secret !== FALSE){
-      $url .= "&sig=" . md5( $url . $this->access_token_secret );
+
+    switch (intval($this->oauth_version)) {
+      case 1:
+        $oauth['oauth_token'] = $this->access_token;
+
+        $values = array(
+          'oauth_consumer_key'    => $this->client_id,
+          'oauth_nonce'           => md5(uniqid(rand(), TRUE)),
+          'oauth_signature_method'=> 'HMAC-SHA1',
+          'oauth_timestamp'       => time(),
+          'oauth_version'         => '1.0',
+        );
+
+
+        $replace = array(
+          '{METHOD_NAME}'     => $method,
+          '{CLIENT_ID}'       => $this->client_id,
+        );
+
+        if ($this->url_parameters
+          && count($parameters) //&& $action != 'PUT'
+        ) {
+          $params = '';
+          $first = TRUE;
+          foreach ($parameters as $parameter => $value){
+            $params .= ($first ? '' : '&') . $parameter . '=' . $value;
+            $first = FALSE;
+          }
+          $parameters = array();
+          $replace['{METHOD_URI}'] = $params;
+        }
+        else  $replace['{METHOD_URI}'] = '';
+
+        $url = str_replace( array_keys( $replace), array_values( $replace), $this->method_url);
+        $url = trim( $url, '?');
+
+        if ( isset( $options['has_body_sig']) && $options['has_body_sig'])
+          $values         = array_merge($values, $oauth, $parameters, $body);
+        else $values      = array_merge($values, $oauth, $parameters);
+        $uri              = strtok($url, '?');
+        $sign             = $action . '&' . $this->Encode($uri) . '&';
+        $first            = TRUE;
+        $sign_values      = $values;
+        $u                = parse_url($url);
+        if (IsSet($u['query'])) {
+          parse_str($u['query'], $q);
+          foreach ($q as $parameter => $value)
+            $sign_values[$parameter] = $value;
+        }
+        KSort($sign_values);
+        foreach ($sign_values as $parameter => $value) {
+          $sign .= $this->Encode(($first ? '' : '&') . $parameter . '=' . $this->Encode($value));
+          $first = FALSE;
+        }
+        $key = $this->Encode($this->client_secret) . '&' . $this->Encode($this->access_token_secret);
+
+        if ($this->debug)
+          $this->OutputDebug('Signature prepare from sign = {' . $sign . '} and key = {' . $key . '}');
+
+        $values['oauth_signature'] = base64_encode($this->HMAC('sha1', $sign, $key));
+        KSort( $values);
+        if ($this->authorization_header) {
+          $authorization = 'OAuth';
+          $first         = TRUE;
+          foreach ($values as $parameter => $value) {
+            $authorization .= ($first ? ' ' : ', ') . $this->Encode($parameter) . '="' . $this->Encode($value) . '"';
+            $first = FALSE;
+          }
+        }
+        else {
+          if ($action === 'GET') {
+            $first = (strcspn($url, '?') == strlen($url));
+            foreach ($values as $parameter => $value) {
+              $url .= ($first ? '?' : '&') . $this->Encode($parameter) . '=' . $this->Encode($value);
+              $first = FALSE;
+            }
+          }
+          else
+            $params = $values;
+        }
+        break;
+      case 2:
+        $params = '';
+        foreach( $parameters as $key => $value ){
+          $params .= ( $params === '' ? '' : '&' ) . "$key=" . $value;
+        }
+
+
+        $replace = array(
+          '{METHOD_NAME}'     => $method,
+          '{METHOD_URI}'      => $params,
+          '{ACCESS_TOKEN}'    => $this->access_token,
+          '{CLIENT_ID}'       => $this->client_id,
+        );
+        $url = str_replace( array_keys( $replace), array_values( $replace), $this->method_url);
+        $url = trim( $url, '?&');
+
+        if ( $this->authorization_header === TRUE ){
+          $authorization = 'Oauth token ' . $this->access_token;
+        }
+        elseif( strlen( $this->authorization_header) )
+          $authorization = $this->authorization_header . ' ' . $this->access_token;
+
+        $q = parse_url( $url);
+        $uri = $q['scheme'] . $q['host'] . $q['path'];
+        if ( isset( $q['query']) && strlen( $q['query']) ){
+          $params = $q['query'];
+        }
+        else  $params = '';
+
+        if ( ( isset( $options['has_sig']) && $options['has_sig'])
+          || ( isset( $options['has_sig_token']) && $options['has_sig_token'])){
+          if ( strlen($params) ){
+            $sig = '';
+            parse_str( $params, $aq);
+            Ksort( $aq);
+            foreach( $aq as $key => $value ){
+              if ( isset( $options['has_sig_token']) && $options['has_sig_token'] && $value === $this->access_token )
+                continue;
+              $sig .= "$key=" . $value;
+            }
+            $this->OutputDebug($sig);
+            if ( isset( $options['has_sig']) && $options['has_sig'] )
+              $sig   = md5( $sig . $this->client_secret );
+            else
+              $sig   = md5( $sig . md5( $this->access_token . $this->client_secret ));
+            $url    .= "&sig=$sig";
+            $params .= "&sig=$sig";
+            if ( $action === 'POST') $url = $uri;
+
+          }
+        }
+
+        break;
     }
-    //$response = file_get_contents( $url );
-    $ch = curl_init(); // start
-    curl_setopt( $ch, CURLOPT_URL, (string)$url ); // where
-    curl_setopt ( $ch, CURLOPT_RETURNTRANSFER, TRUE ); // why
-    $request_result = curl_exec( $ch ); // do this
-    curl_close( $ch ); // close, free memory
-    $request_result = urldecode ( $request_result );
-    $request_result = json_decode ( $request_result, TRUE );
-    $response = $request_result['response'];
+
+    while( $url !== ''){
+      $headers = array( 'Accept: */*' );
+      //$response = file_get_contents( $url );
+      $ch = curl_init(); // start
+      curl_setopt( $ch, CURLOPT_URL, (string)$url ); // where
+      curl_setopt( $ch, CURLOPT_USERAGENT, $this->oauth_user_agent);
+      curl_setopt( $ch, CURLOPT_ENCODING, 'gzip,deflate' );
+      curl_setopt( $ch, CURLOPT_TIMEOUT, 30 );
+      curl_setopt( $ch, CURLOPT_RETURNTRANSFER, TRUE ); // why
+      curl_setopt( $ch, CURLOPT_HEADER, TRUE);
+      curl_setopt( $ch, CURLOPT_FOLLOWLOCATION, FALSE);
+      curl_setopt( $ch, CURLOPT_COOKIEJAR, "cookie.txt");
+      curl_setopt( $ch, CURLOPT_COOKIEFILE, "cookie.txt");
+      curl_setopt( $ch, CURLOPT_SSL_VERIFYPEER, FALSE);
+      curl_setopt( $ch, CURLOPT_SSL_VERIFYHOST, FALSE);
+      curl_setopt( $ch, CURLOPT_CUSTOMREQUEST, $action);
+      if ( $action === 'PUT' || $action === 'POST' ){
+
+        if ( !isset( $options['content-type']) || $options['content-type'] == 'application/json' ){
+          $headers[] = "Content-type: application/json;charset=utf-8";
+
+          $body = is_string( $body) ? $body : json_encode( $body);
+        }
+        elseif ( $options['content-type'] == 'application/x-www-form-urlencoded' ){
+
+          $headers[] = "Content-type: application/x-www-form-urlencoded;charset=utf-8";
+          $body = is_string( $body) ? $body : http_build_query( $body);
+          $q    = is_string( $params) ? $params : http_build_query( $params);
+          if ( strlen( $q) ) $body .= (strlen($body) ? '&' : '') . $q;
+        }
+        else  {
+          $headers[] = "Content-type: " . $options['content-type'] . ";charset=utf-8";
+        }
+        $headers[] = 'Content-Length: ' . strlen( $body);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+      }
+
+      if ( $this->authorization_header ){
+        $headers[] = "Authorization: $authorization";
+      }
+      curl_setopt( $ch, CURLOPT_HTTPHEADER, $headers );
+      $request_result = curl_exec( $ch ); // do this
+      $headers        = curl_getinfo($ch);
+
+      curl_close( $ch ); // close, free memory
+      $url = array();
+      if ( preg_match('/(?:L|l)ocation:\s*(http[^\r\n\s]++)/xs', $request_result, $url) ){
+        $url = $url[1];
+      }
+      else $url = '';
+
+      $rn = Utf8::strpos( $request_result, "\r\n\r\n");
+      $request_headers = Utf8::substr( $request_result, 0, $rn);
+      $request_result = Utf8::substr( $request_result, $rn + Utf8::strlen("\r\n\r\n"));
+      $response = urldecode ( $request_result );
+      $response = json_decode ( $response, TRUE );
+
+      if ( $this->debug ){
+        $this->OutputDebug( $authorization );
+        $this->OutputDebug( var_export( $headers, TRUE) );
+        $this->OutputDebug( $request_headers );
+        $this->OutputDebug( $request_result );
+
+      }
+    }
+
+
     return TRUE;
   }
 
@@ -1322,9 +1534,11 @@ abstract class Kohana_Oauth_Client
               );
               if ($one_a)
                 $oauth['oauth_verifier'] = $verifier;
+              if ( $expired ) $access_token['secret'] = '';
               $this->access_token_secret = $access_token['secret'];
               if (!$this->SendAPIRequest($url, 'GET', array(), $oauth, array('Resource'=> 'OAuth access token'), $response))
                 return FALSE;
+              $this->OutputDebug( var_export( $response, TRUE));
               if (strlen($this->access_token_error)) {
                 $this->authorization_error = $this->access_token_error;
                 return TRUE;
@@ -1340,6 +1554,9 @@ abstract class Kohana_Oauth_Client
                 'secret'    => $response['oauth_token_secret'],
                 'authorized'=> TRUE
               );
+
+              $this->authorized = TRUE;
+
               if (IsSet($response['oauth_expires_in'])) {
                 $expires = $response['oauth_expires_in'];
                 if (strval($expires) !== strval(intval($expires))
@@ -1351,8 +1568,22 @@ abstract class Kohana_Oauth_Client
                   $this->OutputDebug('Access token expiry: ' . $this->access_token_expiry . ' UTC');
                 $access_token['expiry'] = $this->access_token_expiry;
               }
-              else
-                $this->access_token_expiry = '';
+              else{
+                $this->access_token_expiry = gmstrftime('%Y-%m-%d %H:%M:%S', time() + 999999999);
+                $access_token['expiry'] = $this->access_token_expiry;
+              }
+
+              if ( isset( $response['user_id']) ){
+                $this->access_token_id = $access_token['user_id'] = $response['user_id'];
+              }
+
+              if ( isset( $response['xoauth_yahoo_guid']) ){
+                $this->access_token_id = $access_token['user_id'] = $response['xoauth_yahoo_guid'];
+              }
+
+              if ( isset( $response['user_nsid']) ){
+                $this->access_token_id = $access_token['user_id'] = $response['user_nsid'];
+              }
 
               if (!$this->StoreAccessToken($access_token))
                 return FALSE;
@@ -1367,6 +1598,11 @@ abstract class Kohana_Oauth_Client
           ) {
             $this->access_token        = $access_token['value'];
             $this->access_token_secret = $access_token['secret'];
+            $this->access_token_expiry = $access_token['expiry'];
+            if ( isset( $access_token['user_id']) ){
+              $this->access_token_id   = $access_token['user_id'];
+            }
+
             return TRUE;
           }
         }
@@ -1384,8 +1620,11 @@ abstract class Kohana_Oauth_Client
           $oauth = array(
             'oauth_callback'=> $redirect_uri,
           );
+
           if (!$this->SendAPIRequest($url, 'GET', array(), $oauth, array('Resource'=> 'OAuth request token'), $response))
             return FALSE;
+          if ( $this->debug )
+            $this->OutputDebug( var_export( $response, TRUE));
           if (strlen($this->access_token_error)) {
             $this->authorization_error = $this->access_token_error;
             return TRUE;
@@ -1394,10 +1633,10 @@ abstract class Kohana_Oauth_Client
             || !IsSet($response['oauth_token_secret'])
           ) {
             $this->authorization_error = 'it was not returned the requested token';
-            $this->OutputDebug( var_export( $response, TRUE));
+
             return TRUE;
           }
-          $this->OutputDebug( var_export( $response, TRUE));
+
           $access_token = array(
             'value'     => $response['oauth_token'],
             'secret'    => $response['oauth_token_secret'],
@@ -1531,8 +1770,11 @@ abstract class Kohana_Oauth_Client
               $this->OutputDebug('Access token expiry: ' . $this->access_token_expiry . ' UTC');
             $access_token['expiry'] = $this->access_token_expiry;
           }
-          else
-            $this->access_token_expiry = '';
+          else{
+            $this->access_token_expiry = gmstrftime('%Y-%m-%d %H:%M:%S', time() + 999999999);
+            $access_token['expiry'] = $this->access_token_expiry;
+          }
+
           if (IsSet($response['token_type'])) {
             $this->access_token_type = $response['token_type'];
             if ($this->debug)
@@ -1562,12 +1804,16 @@ abstract class Kohana_Oauth_Client
             return FALSE;
           if (strlen($this->append_state_to_redirect_uri))
             $redirect_uri .= (strpos($redirect_uri, '?') === FALSE ? '?' : '&') . $this->append_state_to_redirect_uri . '=' . $stored_state;
+
+          if ( $this->urlencode_redirect )
+            $redirect_uri = UrlEncode( $redirect_uri);
           $url = str_replace(
-            '{REDIRECT_URI}', UrlEncode($redirect_uri), str_replace(
+            '{REDIRECT_URI}', $redirect_uri, str_replace(
             '{CLIENT_ID}', $this->client_id, str_replace(
             '{SCOPE}', $this->scope, str_replace(
             '{STATE}', $stored_state,
             $url))));
+
           if ($this->debug)
             $this->OutputDebug('Redirecting to OAuth Dialog ' . $url);
           Header('HTTP/1.0 302 OAuth Redirection');
