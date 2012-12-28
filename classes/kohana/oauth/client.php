@@ -894,8 +894,11 @@ abstract class Kohana_Oauth_Client
       'redirect_uri' => $redirect_uri,
     );
 
-    if (!$this->SendAPIRequest($url, 'POST', $values, NULL, array('Resource'      => 'OAuth access token',
-                                                                  'ConvertObjects'=> TRUE), $response)
+    $options = array('Resource'       => 'OAuth access token',
+                     'ConvertObjects' => TRUE,
+                     'authorization'  => 'Basic ' . base64_encode( $this->client_id . ':' . $this->client_secret),
+    );
+    if (!$this->SendAPIRequest($url, 'POST', $values, NULL, $options, $response)
             )
       return FALSE;
     $this->OutputDebug( var_export( $response, TRUE));
@@ -914,7 +917,7 @@ abstract class Kohana_Oauth_Client
       $this->OutputDebug('Accessing the ' . $options['Resource'] . ' at ' . $url . ' with parameters ' . var_export( $parameters, TRUE));
     $arguments     = array();
     $method        = strtoupper($method);
-    $authorization = '';
+    $authorization = (isset( $options['authorization'] ) && strlen ( $options['authorization'])) ? $options['authorization'] : '';
     if (IsSet($oauth)) {
       $values = array(
         'oauth_consumer_key'    => $this->client_id,
@@ -1665,6 +1668,8 @@ abstract class Kohana_Oauth_Client
           $this->OutputDebug('Checking if OAuth access token was already retrieved from ' . $this->access_token_url);
         if (!$this->GetAccessToken($access_token))
           return FALSE;
+        if ( $this->debug )
+          $this->OutputDebug( var_export( $access_token, TRUE));
         if (IsSet($access_token['value'])) {
           if (IsSet($access_token['expiry'])
             && strcmp($this->access_token_expiry = $access_token['expiry'], gmstrftime('%Y-%m-%d %H:%M:%S')) < 0

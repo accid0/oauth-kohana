@@ -177,7 +177,7 @@ class Kohana_Http_Client
 	Function OutputDebug($message)
 	{
 		if($this->log_debug)
-			error_log($message);
+			DB::log( $message);
 		else
 		{
 			$message.="\n";
