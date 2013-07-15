@@ -176,8 +176,9 @@ class Kohana_Http_Client
 
 	Function OutputDebug($message)
 	{
-		if($this->log_debug)
-			DB::log( $message);
+		if($this->log_debug){
+			do_action( 'kwtf_ensure', true, '[HTTP Client] :msg', array( ':msg' => $message));
+    }
 		else
 		{
 			$message.="\n";

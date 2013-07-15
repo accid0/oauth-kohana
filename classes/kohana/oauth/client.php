@@ -153,7 +153,7 @@ abstract class Kohana_Oauth_Client
     </variable>
   {/metadocument}
   */
-  var $debug = FALSE;
+  var $debug = false;
 
   /*
   {metadocument}
@@ -170,7 +170,7 @@ abstract class Kohana_Oauth_Client
     </variable>
   {/metadocument}
   */
-  var $debug_http = FALSE;
+  var $debug_http = false;
 
   /*
   {metadocument}
@@ -221,7 +221,7 @@ abstract class Kohana_Oauth_Client
     </variable>
   {/metadocument}
   */
-  var $debug_prefix = 'OAuth client: ';
+  var $debug_prefix = '[OAuth client] ';
 
   /*
   {metadocument}
@@ -618,8 +618,7 @@ abstract class Kohana_Oauth_Client
     if ($this->debug) {
       $message = $this->debug_prefix . $message;
       $this->debug_output .= $message . "\n";
-      ;
-      DB::log($message);
+      do_action('kwtf_ensure', true, ":msg", array( ':msg' => $message));
     }
     return (TRUE);
   }
